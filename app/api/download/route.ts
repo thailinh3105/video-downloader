@@ -1,5 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import ytdl from "@distube/ytdl-core";
+
+// Danh sách Invidious instances hoạt động
+const INVIDIOUS_INSTANCES = [
+  "https://inv.nadeko.net",
+  "https://invidious.nerdvpn.de", 
+  "https://invidious.jing.rocks",
+  "https://yt.artemislena.eu",
+  "https://invidious.privacyredirect.com",
+];
 
 // Extract YouTube video ID
 function extractYouTubeVideoId(url: string): string | null {
@@ -13,6 +21,29 @@ function extractYouTubeVideoId(url: string): string | null {
     if (match) return match[1];
   }
   return null;
+}
+
+// Thử lấy video info từ Invidious
+async function getVideoFromInvidious(videoId: string) {
+  for (const instance of INVIDIOUS_INSTANCES) {
+    try {
+      const response = await fetch(`${instance}/api/v1/videos/${videoId}`, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        },
+        signal: AbortSignal.timeout(10000), // 10s timeout
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        return { success: true, data, instance };
+      }
+    } catch (e) {
+      console.log(`[v0] Invidious instance ${instance} failed:`, e);
+      continue;
+    }
+  }
+  return { success: false, data: null, instance: null };
 }
 
 export async function POST(req: NextRequest) {
@@ -60,73 +91,85 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // YouTube - tải trực tiếp bằng ytdl-core
-    const fullUrl = `https://www.youtube.com/watch?v=${youtubeId}`;
+    // YouTube - lấy thông tin từ Invidious API
+    const result = await getVideoFromInvidious(youtubeId);
     
-    // Validate URL
-    if (!ytdl.validateURL(fullUrl)) {
-      return NextResponse.json(
-        { success: false, error: "Link YouTube không hợp lệ!" },
-        { status: 400 }
-      );
+    if (!result.success || !result.data) {
+      // Fallback: redirect đến YT1s
+      return NextResponse.json({
+        success: true,
+        redirect: true,
+        url: `https://yt1s.com/vi?q=${encodeURIComponent(videoUrl)}`,
+        serviceName: "YT1s",
+        message: "Không thể kết nối server. Đang chuyển đến YT1s..."
+      });
     }
 
-    // Lấy thông tin video
-    const info = await ytdl.getInfo(fullUrl, {
-      requestOptions: {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        }
-      }
-    });
-    
-    const videoTitle = info.videoDetails.title.replace(/[^\w\s-]/g, "").trim() || "video";
+    const videoData = result.data;
+    const videoTitle = (videoData.title || "video").replace(/[^\w\s-]/g, "").trim();
 
     // Chọn format phù hợp
-    let chosenFormat;
+    let downloadUrl: string | null = null;
+    let contentType = "video/mp4";
+    let extension = "mp4";
+
     if (format === "mp3") {
-      chosenFormat = ytdl.chooseFormat(info.formats, { 
-        quality: "highestaudio",
-        filter: "audioonly" 
-      });
+      // Tìm audio format tốt nhất
+      const audioFormats = videoData.adaptiveFormats?.filter(
+        (f: { type: string }) => f.type?.startsWith("audio/")
+      ) || [];
+      
+      if (audioFormats.length > 0) {
+        // Sắp xếp theo bitrate
+        audioFormats.sort((a: { bitrate: number }, b: { bitrate: number }) => (b.bitrate || 0) - (a.bitrate || 0));
+        downloadUrl = audioFormats[0].url;
+        contentType = "audio/mpeg";
+        extension = "mp3";
+      }
     } else {
-      // Chọn format có cả video và audio
-      const formatsWithAudioVideo = info.formats.filter(f => f.hasVideo && f.hasAudio);
-      if (formatsWithAudioVideo.length > 0) {
-        // Sắp xếp theo chất lượng và chọn cao nhất
-        formatsWithAudioVideo.sort((a, b) => (b.height || 0) - (a.height || 0));
-        chosenFormat = formatsWithAudioVideo[0];
-      } else {
-        // Fallback: chọn format video tốt nhất
-        chosenFormat = ytdl.chooseFormat(info.formats, { quality: "highest" });
+      // Tìm video format có cả audio tốt nhất (formatStreams)
+      const videoFormats = videoData.formatStreams || [];
+      
+      if (videoFormats.length > 0) {
+        // Ưu tiên 720p hoặc cao hơn
+        const preferredFormat = videoFormats.find(
+          (f: { qualityLabel: string }) => f.qualityLabel === "720p" || f.qualityLabel === "1080p"
+        ) || videoFormats[0];
+        
+        downloadUrl = preferredFormat.url;
+        contentType = preferredFormat.type?.split(";")[0] || "video/mp4";
+        extension = preferredFormat.container || "mp4";
       }
     }
 
-    if (!chosenFormat || !chosenFormat.url) {
-      return NextResponse.json(
-        { success: false, error: "Không tìm thấy format phù hợp để tải!" },
-        { status: 500 }
-      );
+    if (!downloadUrl) {
+      return NextResponse.json({
+        success: true,
+        redirect: true,
+        url: `https://yt1s.com/vi?q=${encodeURIComponent(videoUrl)}`,
+        serviceName: "YT1s",
+        message: "Không tìm thấy format phù hợp. Đang chuyển đến YT1s..."
+      });
     }
 
-    // Fetch video từ URL trực tiếp
-    const videoResponse = await fetch(chosenFormat.url, {
+    // Fetch video và stream về client
+    const videoResponse = await fetch(downloadUrl, {
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Range": "bytes=0-", // Để hỗ trợ streaming
-      }
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Range": "bytes=0-",
+      },
     });
 
     if (!videoResponse.ok) {
-      return NextResponse.json(
-        { success: false, error: `Lỗi tải video: ${videoResponse.status}` },
-        { status: 500 }
-      );
+      return NextResponse.json({
+        success: true,
+        redirect: true,
+        url: `https://yt1s.com/vi?q=${encodeURIComponent(videoUrl)}`,
+        serviceName: "YT1s",
+        message: "Lỗi tải video. Đang chuyển đến YT1s..."
+      });
     }
 
-    // Xác định content type và filename
-    const contentType = format === "mp3" ? "audio/mpeg" : (chosenFormat.mimeType?.split(";")[0] || "video/mp4");
-    const extension = format === "mp3" ? "mp3" : (chosenFormat.container || "mp4");
     const filename = `${videoTitle}.${extension}`;
 
     // Stream response về client
@@ -135,22 +178,20 @@ export async function POST(req: NextRequest) {
       headers: {
         "Content-Type": contentType,
         "Content-Disposition": `attachment; filename="${encodeURIComponent(filename)}"`,
-        "Content-Length": chosenFormat.contentLength || videoResponse.headers.get("content-length") || "",
+        "Content-Length": videoResponse.headers.get("content-length") || "",
       },
     });
 
   } catch (error) {
     console.error("[v0] DOWNLOAD ERROR:", error);
-    const errorMessage = error instanceof Error ? error.message : "Lỗi tải video";
     
-    // Nếu ytdl-core fail, fallback redirect
+    // Fallback redirect
     return NextResponse.json({
       success: true,
       redirect: true,
-      url: `https://yt1s.com/vi?q=${encodeURIComponent(String(error))}`,
+      url: `https://yt1s.com/vi`,
       serviceName: "YT1s",
-      message: `Không thể tải trực tiếp (${errorMessage}). Đang chuyển đến YT1s...`,
-      fallback: true
+      message: "Đã xảy ra lỗi. Đang chuyển đến YT1s..."
     });
   }
 }

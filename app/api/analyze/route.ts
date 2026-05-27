@@ -1,5 +1,13 @@
 import { NextResponse } from "next/server";
-import ytdl from "@distube/ytdl-core";
+
+// Danh sách Invidious instances hoạt động
+const INVIDIOUS_INSTANCES = [
+  "https://inv.nadeko.net",
+  "https://invidious.nerdvpn.de", 
+  "https://invidious.jing.rocks",
+  "https://yt.artemislena.eu",
+  "https://invidious.privacyredirect.com",
+];
 
 // Hàm extract video ID từ YouTube URL
 function extractYouTubeVideoId(url: string): string | null {
@@ -33,6 +41,29 @@ function isValidVideoUrl(url: string): boolean {
   }
 }
 
+// Thử lấy video info từ Invidious
+async function getVideoFromInvidious(videoId: string) {
+  for (const instance of INVIDIOUS_INSTANCES) {
+    try {
+      const response = await fetch(`${instance}/api/v1/videos/${videoId}`, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        },
+        signal: AbortSignal.timeout(8000), // 8s timeout
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        return { success: true, data, instance };
+      }
+    } catch (e) {
+      console.log(`Invidious instance ${instance} failed:`, e);
+      continue;
+    }
+  }
+  return { success: false, data: null, instance: null };
+}
+
 export async function POST(request: Request) {
   try {
     const { videoUrl } = await request.json();
@@ -48,77 +79,62 @@ export async function POST(request: Request) {
       });
     }
 
-    // Lấy thông tin từ YouTube oEmbed API nếu là YouTube video
     let title = "Video";
     let thumbnail = "";
     let author = "Unknown";
-    let downloadUrl = "";
+    let duration = "N/A";
     
     const youtubeId = extractYouTubeVideoId(videoUrl);
+    
     if (youtubeId) {
-      const fullUrl = `https://www.youtube.com/watch?v=${youtubeId}`;
+      // Thử lấy thông tin từ Invidious API
+      const result = await getVideoFromInvidious(youtubeId);
       
-      try {
-        // Dùng ytdl-core để lấy thông tin chi tiết
-        const info = await ytdl.getInfo(fullUrl, {
-          requestOptions: {
-            headers: {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            }
-          }
-        });
-        
-        const videoDetails = info.videoDetails;
-        title = videoDetails.title || "Video";
-        author = videoDetails.author?.name || "Unknown";
-        thumbnail = videoDetails.thumbnails[videoDetails.thumbnails.length - 1]?.url || `https://img.youtube.com/vi/${youtubeId}/maxresdefault.jpg`;
+      if (result.success && result.data) {
+        const videoData = result.data;
+        title = videoData.title || "Video";
+        author = videoData.author || "Unknown";
+        thumbnail = videoData.videoThumbnails?.[0]?.url || `https://img.youtube.com/vi/${youtubeId}/maxresdefault.jpg`;
         
         // Tính duration
-        const durationSec = parseInt(videoDetails.lengthSeconds) || 0;
-        const durationMin = `${Math.floor(durationSec / 60)}:${String(durationSec % 60).padStart(2, '0')}`;
+        const durationSec = videoData.lengthSeconds || 0;
+        duration = `${Math.floor(durationSec / 60)}:${String(durationSec % 60).padStart(2, '0')}`;
         
         // Lấy các format có sẵn
-        const formats = info.formats
-          .filter(f => f.hasVideo && f.hasAudio)
-          .map(f => ({
-            itag: f.itag,
-            quality: f.qualityLabel || f.quality,
-            container: f.container,
-          }));
+        const formats = (videoData.formatStreams || []).map((f: { itag: number; qualityLabel: string; container: string }) => ({
+          itag: f.itag,
+          quality: f.qualityLabel,
+          container: f.container,
+        }));
 
         return NextResponse.json({
           success: true,
           title: title,
           thumbnail: thumbnail,
-          duration: durationMin,
+          duration: duration,
           author: author,
           formats: formats,
           downloadUrl: videoUrl,
         });
-        
-      } catch (ytdlError) {
-        console.error("ytdl-core error, falling back to oEmbed:", ytdlError);
-        
-        // Fallback: dùng oEmbed API
-        try {
-          const oembedRes = await fetch(
-            `https://www.youtube.com/oembed?url=${fullUrl}&format=json`
-          );
-          if (oembedRes.ok) {
-            const oembedData = await oembedRes.json();
-            title = oembedData.title || "Video";
-            author = oembedData.author_name || "Unknown";
-            thumbnail = `https://img.youtube.com/vi/${youtubeId}/maxresdefault.jpg`;
-          }
-        } catch (e) {
-          console.error("oEmbed error:", e);
-        }
       }
       
-      downloadUrl = videoUrl;
+      // Fallback: dùng oEmbed API nếu Invidious fail
+      try {
+        const oembedRes = await fetch(
+          `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${youtubeId}&format=json`
+        );
+        if (oembedRes.ok) {
+          const oembedData = await oembedRes.json();
+          title = oembedData.title || "Video";
+          author = oembedData.author_name || "Unknown";
+          thumbnail = `https://img.youtube.com/vi/${youtubeId}/maxresdefault.jpg`;
+        }
+      } catch (e) {
+        console.error("oEmbed error:", e);
+        thumbnail = `https://img.youtube.com/vi/${youtubeId}/maxresdefault.jpg`;
+      }
     } else {
       // Cho các platform khác (TikTok, etc.)
-      downloadUrl = videoUrl;
       title = "Video từ " + new URL(videoUrl).hostname;
     }
 
@@ -127,9 +143,9 @@ export async function POST(request: Request) {
       success: true,
       title: title,
       thumbnail: thumbnail,
-      duration: "N/A",
+      duration: duration,
       author: author,
-      downloadUrl: downloadUrl,
+      downloadUrl: videoUrl,
     });
 
   } catch (error: unknown) {
