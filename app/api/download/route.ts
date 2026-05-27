@@ -19,8 +19,6 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { videoUrl, format = "mp4" } = body;
 
-    console.log("[v0] Download request:", { videoUrl, format });
-
     if (!videoUrl) {
       return NextResponse.json(
         { success: false, error: "Missing URL" },
@@ -30,97 +28,46 @@ export async function POST(req: NextRequest) {
 
     const youtubeId = extractYouTubeVideoId(videoUrl);
     
+    // Xác định URL redirect dựa trên platform
+    let redirectUrl: string;
+    let serviceName: string;
+
     if (youtubeId) {
-      // Sử dụng API từ ssyoutube/savefrom
-      const apiUrl = `https://api.vevioz.com/api/button/${format === "mp3" ? "mp3" : "mp4"}/${youtubeId}`;
-      
-      console.log("[v0] Fetching from vevioz:", apiUrl);
-      
-      const apiResponse = await fetch(apiUrl, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        },
-      });
-
-      if (!apiResponse.ok) {
-        console.log("[v0] Vevioz API failed, trying alternative...");
-        
-        // Fallback: trả về redirect URL cho user tự tải
-        const redirectUrl = `https://www.y2mate.com/youtube/${youtubeId}`;
-        return NextResponse.json({
-          success: true,
-          redirect: true,
-          url: redirectUrl,
-          message: "Vui lòng tải từ trang web bên ngoài"
-        });
+      // YouTube - sử dụng y2mate hoặc ssyoutube
+      if (format === "mp3") {
+        redirectUrl = `https://www.y2mate.com/youtube-mp3/${youtubeId}`;
+      } else {
+        redirectUrl = `https://www.y2mate.com/youtube/${youtubeId}`;
       }
-
-      const html = await apiResponse.text();
-      
-      // Parse download link từ HTML response
-      const linkMatch = html.match(/href="(https:\/\/[^"]+)"/);
-      
-      if (linkMatch && linkMatch[1]) {
-        const downloadLink = linkMatch[1];
-        console.log("[v0] Found download link:", downloadLink.substring(0, 50) + "...");
-        
-        // Fetch video và stream về client
-        const videoResponse = await fetch(downloadLink, {
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-          },
-        });
-
-        if (!videoResponse.ok) {
-          // Nếu không fetch được, trả về link trực tiếp
-          return NextResponse.json({
-            success: true,
-            redirect: true,
-            url: downloadLink,
-          });
-        }
-
-        const contentType = format === "mp3" ? "audio/mpeg" : "video/mp4";
-        const extension = format === "mp3" ? "mp3" : "mp4";
-        const filename = `youtube_${youtubeId}.${extension}`;
-
-        return new Response(videoResponse.body, {
-          status: 200,
-          headers: {
-            "Content-Type": contentType,
-            "Content-Disposition": `attachment; filename="${filename}"`,
-          },
-        });
-      }
-      
-      // Không tìm thấy link, trả về redirect
-      return NextResponse.json({
-        success: true,
-        redirect: true,
-        url: `https://www.y2mate.com/youtube/${youtubeId}`,
-        message: "Vui lòng tải từ trang web"
-      });
-    }
-
-    // Cho các platform khác (TikTok, Instagram, etc.)
-    // Trả về redirect tới snaptik hoặc savefrom
-    let redirectUrl = "https://snaptik.app";
-    
-    if (videoUrl.includes("tiktok.com") || videoUrl.includes("douyin.com")) {
-      redirectUrl = `https://snaptik.app?url=${encodeURIComponent(videoUrl)}`;
+      serviceName = "Y2Mate";
+    } else if (videoUrl.includes("tiktok.com") || videoUrl.includes("douyin.com")) {
+      // TikTok / Douyin
+      redirectUrl = `https://snaptik.app`;
+      serviceName = "SnapTik";
     } else if (videoUrl.includes("instagram.com")) {
-      redirectUrl = `https://snapinsta.app?url=${encodeURIComponent(videoUrl)}`;
+      // Instagram
+      redirectUrl = `https://snapinsta.app`;
+      serviceName = "SnapInsta";
     } else if (videoUrl.includes("twitter.com") || videoUrl.includes("x.com")) {
+      // Twitter / X
       redirectUrl = `https://twitsave.com/info?url=${encodeURIComponent(videoUrl)}`;
+      serviceName = "TwitSave";
     } else if (videoUrl.includes("facebook.com") || videoUrl.includes("fb.watch")) {
-      redirectUrl = `https://snapsave.app?url=${encodeURIComponent(videoUrl)}`;
+      // Facebook
+      redirectUrl = `https://snapsave.app`;
+      serviceName = "SnapSave";
+    } else {
+      // Các platform khác - thử với savefrom
+      redirectUrl = `https://en.savefrom.net/1-youtube-video-downloader-360/#url=${encodeURIComponent(videoUrl)}`;
+      serviceName = "SaveFrom";
     }
 
     return NextResponse.json({
       success: true,
       redirect: true,
       url: redirectUrl,
-      message: "Vui lòng tải từ trang web bên ngoài"
+      serviceName: serviceName,
+      message: `Đang chuyển đến ${serviceName} để tải video...`
     });
 
   } catch (error) {

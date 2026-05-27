@@ -100,7 +100,7 @@ export function VideoDownloader() {
         // Nếu là redirect (mở trang web bên ngoài)
         if (data.redirect && data.url) {
           window.open(data.url, "_blank");
-          alert("Đã mở trang tải video. Vui lòng tải từ trang web đó.");
+          alert(data.message || `Đã mở ${data.serviceName || "trang tải video"}. Vui lòng dán link video vào đó và tải về.`);
           return;
         }
         
