@@ -74,7 +74,7 @@ export function VideoDownloader() {
     setIsLoading(true);
 
     try {
-      // Gửi toàn bộ cấu hình (định dạng, độ phân giải) qua Backend để tải file về máy
+      // Gửi request tải video
       const response = await fetch("/api/download", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -82,17 +82,40 @@ export function VideoDownloader() {
           videoUrl: url,
           format: format, 
           resolution: resolution,
-          savePath: savePath
         }),
       });
 
-      const data = await response.json();
-      if (data.success) {
-        alert(`Tải thành công! File đã được lưu vào thư mục: ${savePath}`);
-      } else {
+      // Kiểm tra nếu response là JSON (tức là có lỗi)
+      const contentType = response.headers.get("content-type");
+      if (contentType?.includes("application/json")) {
+        const data = await response.json();
         alert("Tải thất bại: " + data.error);
+        return;
       }
+
+      // Nếu thành công, tải file về
+      const blob = await response.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      
+      // Lấy filename từ header hoặc dùng tên mặc định
+      const disposition = response.headers.get("content-disposition");
+      let filename = `video.${format}`;
+      if (disposition) {
+        const match = disposition.match(/filename="?([^"]+)"?/);
+        if (match) filename = decodeURIComponent(match[1]);
+      }
+      
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(downloadUrl);
+      
+      alert(`Tải thành công! File: ${filename}`);
     } catch (error) {
+      console.error("[v0] Download error:", error);
       alert("Lỗi kết nối hệ thống khi tải video!");
     } finally {
       setIsLoading(false);

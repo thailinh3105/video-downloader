@@ -1,96 +1,85 @@
 import { NextRequest, NextResponse } from "next/server";
-import { exec } from "child_process";
-import fs from "fs";
-import path from "path";
-import os from "os";
+import ytdl from "@distube/ytdl-core";
 
 export async function POST(req: NextRequest) {
   try {
-    // Nhận data từ frontend
     const body = await req.json();
+    const { videoUrl, format = "mp4" } = body;
 
-    console.log("BODY:", body);
+    console.log("[v0] Download request:", { videoUrl, format });
 
-    const { videoUrl } = body;
-
-    console.log("VIDEO URL:", videoUrl);
-
-    // Check URL
     if (!videoUrl) {
       return NextResponse.json(
-        {
-          error: "Missing URL",
-        },
-        {
-          status: 400,
-        }
+        { success: false, error: "Missing URL" },
+        { status: 400 }
       );
     }
 
-    // Tạo file tạm
-    const outputPath = path.join(
-      os.tmpdir(),
-      `video-${Date.now()}.mp4`
-    );
-
-    console.log("OUTPUT:", outputPath);
-
-    // Command yt-dlp
-    const command = `yt-dlp -f mp4 -o "${outputPath}" "${videoUrl}"`;
-
-    console.log("COMMAND:", command);
-
-    // Tải video
-    await new Promise((resolve, reject) => {
-      exec(command, (error, stdout, stderr) => {
-        console.log(stdout);
-        console.log(stderr);
-
-        if (error) {
-          reject(error);
-        } else {
-          resolve(true);
-        }
-      });
-    });
-
-    // Check file tồn tại
-    if (!fs.existsSync(outputPath)) {
+    // Validate URL
+    if (!ytdl.validateURL(videoUrl)) {
       return NextResponse.json(
-        {
-          error: "Video file not found after download",
-        },
-        {
-          status: 500,
-        }
+        { success: false, error: "Link video không hợp lệ!" },
+        { status: 400 }
       );
     }
 
-    // Đọc file video
-    const videoBuffer = fs.readFileSync(outputPath);
+    // Lấy thông tin video
+    const info = await ytdl.getInfo(videoUrl);
+    const videoTitle = info.videoDetails.title.replace(/[^\w\s-]/g, "").trim();
 
-    // Xóa file tạm
-    fs.unlinkSync(outputPath);
+    console.log("[v0] Video info retrieved:", videoTitle);
+
+    // Chọn format phù hợp
+    let chosenFormat;
+    if (format === "mp3") {
+      // Chọn audio quality cao nhất
+      chosenFormat = ytdl.chooseFormat(info.formats, { 
+        quality: "highestaudio",
+        filter: "audioonly" 
+      });
+    } else {
+      // Chọn video có cả audio và video
+      chosenFormat = ytdl.chooseFormat(info.formats, { 
+        quality: "highest",
+        filter: (f) => f.hasVideo && f.hasAudio 
+      });
+    }
+
+    console.log("[v0] Chosen format:", chosenFormat.itag, chosenFormat.qualityLabel);
+
+    // Tạo stream và convert sang buffer
+    const videoStream = ytdl.downloadFromInfo(info, { format: chosenFormat });
+    
+    // Collect stream chunks
+    const chunks: Buffer[] = [];
+    for await (const chunk of videoStream) {
+      chunks.push(Buffer.from(chunk));
+    }
+    const videoBuffer = Buffer.concat(chunks);
+
+    console.log("[v0] Download complete, size:", videoBuffer.length);
+
+    // Xác định content type và filename
+    const contentType = format === "mp3" ? "audio/mpeg" : "video/mp4";
+    const extension = format === "mp3" ? "mp3" : "mp4";
+    const filename = `${videoTitle}.${extension}`;
 
     // Trả file về frontend
     return new Response(videoBuffer, {
       status: 200,
       headers: {
-        "Content-Type": "video/mp4",
-        "Content-Disposition":
-          'attachment; filename="youtube-video.mp4"',
+        "Content-Type": contentType,
+        "Content-Disposition": `attachment; filename="${encodeURIComponent(filename)}"`,
+        "Content-Length": videoBuffer.length.toString(),
       },
     });
   } catch (error) {
-    console.error("DOWNLOAD ERROR:", error);
-
+    console.error("[v0] DOWNLOAD ERROR:", error);
+    const errorMessage = error instanceof Error ? error.message : "Lỗi tải video";
+    
     return NextResponse.json(
-      {
-        error: String(error),
-      },
-      {
-        status: 500,
-      }
+      { success: false, error: errorMessage },
+      { status: 500 }
     );
   }
 }
