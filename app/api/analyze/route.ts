@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import ytdl from "@distube/ytdl-core";
 
 // Hàm extract video ID từ YouTube URL
 function extractYouTubeVideoId(url: string): string | null {
@@ -55,22 +56,66 @@ export async function POST(request: Request) {
     
     const youtubeId = extractYouTubeVideoId(videoUrl);
     if (youtubeId) {
+      const fullUrl = `https://www.youtube.com/watch?v=${youtubeId}`;
+      
       try {
-        const oembedRes = await fetch(
-          `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${youtubeId}&format=json`
-        );
-        if (oembedRes.ok) {
-          const oembedData = await oembedRes.json();
-          title = oembedData.title || "Video";
-          author = oembedData.author_name || "Unknown";
-          thumbnail = `https://img.youtube.com/vi/${youtubeId}/maxresdefault.jpg`;
+        // Dùng ytdl-core để lấy thông tin chi tiết
+        const info = await ytdl.getInfo(fullUrl, {
+          requestOptions: {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            }
+          }
+        });
+        
+        const videoDetails = info.videoDetails;
+        title = videoDetails.title || "Video";
+        author = videoDetails.author?.name || "Unknown";
+        thumbnail = videoDetails.thumbnails[videoDetails.thumbnails.length - 1]?.url || `https://img.youtube.com/vi/${youtubeId}/maxresdefault.jpg`;
+        
+        // Tính duration
+        const durationSec = parseInt(videoDetails.lengthSeconds) || 0;
+        const durationMin = `${Math.floor(durationSec / 60)}:${String(durationSec % 60).padStart(2, '0')}`;
+        
+        // Lấy các format có sẵn
+        const formats = info.formats
+          .filter(f => f.hasVideo && f.hasAudio)
+          .map(f => ({
+            itag: f.itag,
+            quality: f.qualityLabel || f.quality,
+            container: f.container,
+          }));
+
+        return NextResponse.json({
+          success: true,
+          title: title,
+          thumbnail: thumbnail,
+          duration: durationMin,
+          author: author,
+          formats: formats,
+          downloadUrl: videoUrl,
+        });
+        
+      } catch (ytdlError) {
+        console.error("ytdl-core error, falling back to oEmbed:", ytdlError);
+        
+        // Fallback: dùng oEmbed API
+        try {
+          const oembedRes = await fetch(
+            `https://www.youtube.com/oembed?url=${fullUrl}&format=json`
+          );
+          if (oembedRes.ok) {
+            const oembedData = await oembedRes.json();
+            title = oembedData.title || "Video";
+            author = oembedData.author_name || "Unknown";
+            thumbnail = `https://img.youtube.com/vi/${youtubeId}/maxresdefault.jpg`;
+          }
+        } catch (e) {
+          console.error("oEmbed error:", e);
         }
-      } catch (e) {
-        console.error("oEmbed error:", e);
       }
       
-      // Sử dụng y2mate API thông qua proxy
-      downloadUrl = videoUrl; // Sẽ xử lý ở download route
+      downloadUrl = videoUrl;
     } else {
       // Cho các platform khác (TikTok, etc.)
       downloadUrl = videoUrl;
