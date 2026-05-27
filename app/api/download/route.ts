@@ -33,33 +33,33 @@ export async function POST(req: NextRequest) {
     let serviceName: string;
 
     if (youtubeId) {
-      // YouTube - sử dụng y2mate hoặc ssyoutube
+      // YouTube - sử dụng yt1s.com (hoạt động ở VN)
       if (format === "mp3") {
-        redirectUrl = `https://www.y2mate.com/youtube-mp3/${youtubeId}`;
+        redirectUrl = `https://yt1s.com/vi/youtube-to-mp3?q=${encodeURIComponent(videoUrl)}`;
       } else {
-        redirectUrl = `https://www.y2mate.com/youtube/${youtubeId}`;
+        redirectUrl = `https://yt1s.com/vi?q=${encodeURIComponent(videoUrl)}`;
       }
-      serviceName = "Y2Mate";
+      serviceName = "YT1s";
     } else if (videoUrl.includes("tiktok.com") || videoUrl.includes("douyin.com")) {
       // TikTok / Douyin
-      redirectUrl = `https://snaptik.app`;
-      serviceName = "SnapTik";
+      redirectUrl = `https://ssstik.io/vi`;
+      serviceName = "SssTik";
     } else if (videoUrl.includes("instagram.com")) {
       // Instagram
-      redirectUrl = `https://snapinsta.app`;
-      serviceName = "SnapInsta";
+      redirectUrl = `https://igdownloader.app/vi`;
+      serviceName = "IGDownloader";
     } else if (videoUrl.includes("twitter.com") || videoUrl.includes("x.com")) {
       // Twitter / X
-      redirectUrl = `https://twitsave.com/info?url=${encodeURIComponent(videoUrl)}`;
-      serviceName = "TwitSave";
+      redirectUrl = `https://ssstwitter.com/vi?url=${encodeURIComponent(videoUrl)}`;
+      serviceName = "SssTwitter";
     } else if (videoUrl.includes("facebook.com") || videoUrl.includes("fb.watch")) {
       // Facebook
-      redirectUrl = `https://snapsave.app`;
-      serviceName = "SnapSave";
+      redirectUrl = `https://fdown.net/vi/`;
+      serviceName = "FDown";
     } else {
-      // Các platform khác - thử với savefrom
-      redirectUrl = `https://en.savefrom.net/1-youtube-video-downloader-360/#url=${encodeURIComponent(videoUrl)}`;
-      serviceName = "SaveFrom";
+      // Các platform khác
+      redirectUrl = `https://yt1s.com/vi?q=${encodeURIComponent(videoUrl)}`;
+      serviceName = "YT1s";
     }
 
     return NextResponse.json({
