@@ -1,12 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import ytdl from "@distube/ytdl-core";
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const { videoUrl, format = "mp4" } = body;
-
-    console.log("[v0] Download request:", { videoUrl, format });
 
     if (!videoUrl) {
       return NextResponse.json(
@@ -15,66 +12,94 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Validate URL
-    if (!ytdl.validateURL(videoUrl)) {
+    // Sử dụng Cobalt API để lấy link tải
+    const cobaltResponse = await fetch("https://api.cobalt.tools/", {
+      method: "POST",
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        url: videoUrl,
+        videoQuality: "1080",
+        audioFormat: format === "mp3" ? "mp3" : "best",
+        downloadMode: format === "mp3" ? "audio" : "auto",
+        filenameStyle: "pretty",
+      }),
+    });
+
+    if (!cobaltResponse.ok) {
+      console.error("Cobalt API error:", cobaltResponse.status);
       return NextResponse.json(
-        { success: false, error: "Link video không hợp lệ!" },
+        { success: false, error: "Lỗi kết nối API. Vui lòng thử lại." },
+        { status: 500 }
+      );
+    }
+
+    const cobaltData = await cobaltResponse.json();
+
+    if (cobaltData.status === "error") {
+      return NextResponse.json(
+        { success: false, error: cobaltData.error?.code || "Không thể tải video!" },
         { status: 400 }
       );
     }
 
-    // Lấy thông tin video
-    const info = await ytdl.getInfo(videoUrl);
-    const videoTitle = info.videoDetails.title.replace(/[^\w\s-]/g, "").trim();
+    // Nếu có link trực tiếp, redirect hoặc trả về
+    if (cobaltData.status === "redirect" || cobaltData.status === "tunnel") {
+      const downloadUrl = cobaltData.url;
+      
+      if (!downloadUrl) {
+        return NextResponse.json(
+          { success: false, error: "Không tìm thấy link tải!" },
+          { status: 400 }
+        );
+      }
 
-    console.log("[v0] Video info retrieved:", videoTitle);
+      // Fetch video từ URL và stream về client
+      const videoResponse = await fetch(downloadUrl);
+      
+      if (!videoResponse.ok) {
+        return NextResponse.json(
+          { success: false, error: "Không thể tải file từ nguồn!" },
+          { status: 500 }
+        );
+      }
 
-    // Chọn format phù hợp
-    let chosenFormat;
-    if (format === "mp3") {
-      // Chọn audio quality cao nhất
-      chosenFormat = ytdl.chooseFormat(info.formats, { 
-        quality: "highestaudio",
-        filter: "audioonly" 
-      });
-    } else {
-      // Chọn video có cả audio và video
-      chosenFormat = ytdl.chooseFormat(info.formats, { 
-        quality: "highest",
-        filter: (f) => f.hasVideo && f.hasAudio 
+      const contentType = videoResponse.headers.get("content-type") || "video/mp4";
+      const contentLength = videoResponse.headers.get("content-length");
+      
+      // Tạo filename
+      const extension = format === "mp3" ? "mp3" : "mp4";
+      const filename = `video_${Date.now()}.${extension}`;
+
+      // Stream response về client
+      return new Response(videoResponse.body, {
+        status: 200,
+        headers: {
+          "Content-Type": contentType,
+          "Content-Disposition": `attachment; filename="${filename}"`,
+          ...(contentLength && { "Content-Length": contentLength }),
+        },
       });
     }
 
-    console.log("[v0] Chosen format:", chosenFormat.itag, chosenFormat.qualityLabel);
-
-    // Tạo stream và convert sang buffer
-    const videoStream = ytdl.downloadFromInfo(info, { format: chosenFormat });
-    
-    // Collect stream chunks
-    const chunks: Buffer[] = [];
-    for await (const chunk of videoStream) {
-      chunks.push(Buffer.from(chunk));
+    // Nếu có picker (nhiều lựa chọn), trả về danh sách
+    if (cobaltData.status === "picker" && cobaltData.picker) {
+      return NextResponse.json({
+        success: true,
+        status: "picker",
+        picker: cobaltData.picker,
+      });
     }
-    const videoBuffer = Buffer.concat(chunks);
 
-    console.log("[v0] Download complete, size:", videoBuffer.length);
+    return NextResponse.json(
+      { success: false, error: "Định dạng response không hỗ trợ!" },
+      { status: 400 }
+    );
 
-    // Xác định content type và filename
-    const contentType = format === "mp3" ? "audio/mpeg" : "video/mp4";
-    const extension = format === "mp3" ? "mp3" : "mp4";
-    const filename = `${videoTitle}.${extension}`;
-
-    // Trả file về frontend
-    return new Response(videoBuffer, {
-      status: 200,
-      headers: {
-        "Content-Type": contentType,
-        "Content-Disposition": `attachment; filename="${encodeURIComponent(filename)}"`,
-        "Content-Length": videoBuffer.length.toString(),
-      },
-    });
   } catch (error) {
-    console.error("[v0] DOWNLOAD ERROR:", error);
+    console.error("DOWNLOAD ERROR:", error);
     const errorMessage = error instanceof Error ? error.message : "Lỗi tải video";
     
     return NextResponse.json(
