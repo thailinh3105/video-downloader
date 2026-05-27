@@ -85,15 +85,29 @@ export function VideoDownloader() {
         }),
       });
 
-      // Kiểm tra nếu response là JSON (tức là có lỗi)
+      // Kiểm tra content type của response
       const contentType = response.headers.get("content-type");
+      
       if (contentType?.includes("application/json")) {
         const data = await response.json();
-        alert("Tải thất bại: " + data.error);
+        
+        // Nếu có lỗi
+        if (!data.success && data.error) {
+          alert("Tải thất bại: " + data.error);
+          return;
+        }
+        
+        // Nếu là redirect (mở trang web bên ngoài)
+        if (data.redirect && data.url) {
+          window.open(data.url, "_blank");
+          alert("Đã mở trang tải video. Vui lòng tải từ trang web đó.");
+          return;
+        }
+        
         return;
       }
 
-      // Nếu thành công, tải file về
+      // Nếu là file binary, tải về
       const blob = await response.blob();
       const downloadUrl = window.URL.createObjectURL(blob);
       const a = document.createElement("a");

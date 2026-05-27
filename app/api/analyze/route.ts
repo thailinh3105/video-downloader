@@ -47,41 +47,11 @@ export async function POST(request: Request) {
       });
     }
 
-    // Sử dụng Cobalt API để lấy thông tin video
-    const cobaltResponse = await fetch("https://api.cobalt.tools/", {
-      method: "POST",
-      headers: {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        url: videoUrl,
-        videoQuality: "1080",
-        filenameStyle: "pretty",
-      }),
-    });
-
-    if (!cobaltResponse.ok) {
-      console.error("Cobalt API error:", cobaltResponse.status);
-      return NextResponse.json({ 
-        success: false, 
-        error: "Không thể phân tích video. Vui lòng thử lại sau." 
-      }, { status: 500 });
-    }
-
-    const cobaltData = await cobaltResponse.json();
-    
-    if (cobaltData.status === "error") {
-      return NextResponse.json({ 
-        success: false, 
-        error: cobaltData.error?.code || "Không thể phân tích video này!" 
-      });
-    }
-
     // Lấy thông tin từ YouTube oEmbed API nếu là YouTube video
     let title = "Video";
     let thumbnail = "";
     let author = "Unknown";
+    let downloadUrl = "";
     
     const youtubeId = extractYouTubeVideoId(videoUrl);
     if (youtubeId) {
@@ -98,6 +68,13 @@ export async function POST(request: Request) {
       } catch (e) {
         console.error("oEmbed error:", e);
       }
+      
+      // Sử dụng y2mate API thông qua proxy
+      downloadUrl = videoUrl; // Sẽ xử lý ở download route
+    } else {
+      // Cho các platform khác (TikTok, etc.)
+      downloadUrl = videoUrl;
+      title = "Video từ " + new URL(videoUrl).hostname;
     }
 
     // Trả về thông tin video
@@ -107,9 +84,7 @@ export async function POST(request: Request) {
       thumbnail: thumbnail,
       duration: "N/A",
       author: author,
-      downloadUrl: cobaltData.url || null,
-      picker: cobaltData.picker || null, // Cho trường hợp có nhiều lựa chọn
-      status: cobaltData.status,
+      downloadUrl: downloadUrl,
     });
 
   } catch (error: unknown) {
